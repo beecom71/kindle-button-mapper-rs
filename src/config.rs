@@ -40,8 +40,12 @@ pub struct DeviceConfig {
     pub key_repeat: Option<(u32, u32)>,
     pub mappings: HashMap<Key, String>,
     pub long_press_mappings: HashMap<Key, String>,
+    /// Long press that keeps firing every long_press_ms while held.
+    pub long_press_repeat_mappings: HashMap<Key, String>,
     pub dpad_mappings: HashMap<DpadDirection, String>,
     pub dpad_longpress_mappings: HashMap<DpadDirection, String>,
+    /// D-pad long press that keeps firing every long_press_ms while held.
+    pub dpad_longpress_repeat_mappings: HashMap<DpadDirection, String>,
     pub trigger_mappings: HashMap<Trigger, String>,
     pub trigger_longpress_mappings: HashMap<Trigger, String>,
     pub stick_left_mappings: HashMap<DpadDirection, String>,
@@ -87,8 +91,10 @@ impl DeviceConfig {
         self.mappings
             .values()
             .chain(self.long_press_mappings.values())
+            .chain(self.long_press_repeat_mappings.values())
             .chain(self.dpad_mappings.values())
             .chain(self.dpad_longpress_mappings.values())
+            .chain(self.dpad_longpress_repeat_mappings.values())
             .chain(self.trigger_mappings.values())
             .chain(self.trigger_longpress_mappings.values())
             .chain(self.stick_left_mappings.values())
@@ -114,8 +120,10 @@ impl DeviceConfig {
             key_repeat: None,
             mappings: HashMap::new(),
             long_press_mappings: HashMap::new(),
+            long_press_repeat_mappings: HashMap::new(),
             dpad_mappings: HashMap::new(),
             dpad_longpress_mappings: HashMap::new(),
+            dpad_longpress_repeat_mappings: HashMap::new(),
             trigger_mappings: HashMap::new(),
             trigger_longpress_mappings: HashMap::new(),
             stick_left_mappings: HashMap::new(),
@@ -275,8 +283,14 @@ impl Config {
                 }
                 Some("buttons") => fill_key_map(entries, &mut dev.mappings),
                 Some("longpress") => fill_key_map(entries, &mut dev.long_press_mappings),
+                Some("longpress_repeat") => {
+                    fill_key_map(entries, &mut dev.long_press_repeat_mappings)
+                }
                 Some("dpad") => fill_dpad_map(entries, &mut dev.dpad_mappings),
                 Some("dpad_longpress") => fill_dpad_map(entries, &mut dev.dpad_longpress_mappings),
+                Some("dpad_longpress_repeat") => {
+                    fill_dpad_map(entries, &mut dev.dpad_longpress_repeat_mappings)
+                }
                 Some("triggers") => fill_trigger_map(entries, &mut dev.trigger_mappings),
                 Some("triggers_longpress") => {
                     fill_trigger_map(entries, &mut dev.trigger_longpress_mappings)

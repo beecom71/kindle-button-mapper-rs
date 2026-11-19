@@ -386,11 +386,15 @@ fn run_event_loop(
             grabbed = true;
         }
 
+        // Remotes behind uhid send no held events, so time long presses here.
+        mapper.tick();
+        let wait_ms: u16 = if mapper.wants_tick() { 20 } else { 250 };
+
         let mut fds = [PollFd::new(
             unsafe { BorrowedFd::borrow_raw(device.as_raw_fd()) },
             PollFlags::POLLIN,
         )];
-        match poll(&mut fds, 250u16) {
+        match poll(&mut fds, wait_ms) {
             Ok(0) => continue,
             Ok(_) => {}
             Err(nix::errno::Errno::EINTR) => continue,
