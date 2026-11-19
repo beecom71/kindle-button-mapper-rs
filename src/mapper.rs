@@ -217,7 +217,8 @@ impl Mapper {
         }
         // A debounced press never registers in press_start, so its release
         // must not fire the action either.
-        let had_press = self.press_start.remove(&key).is_some();
+        let held_for = self.press_start.remove(&key).map(|start| start.elapsed());
+        let had_press = held_for.is_some();
         let long_press_fired = self.long_press_fired.remove(&key).unwrap_or(false);
         let fired_on_press = self.fired_on_press.remove(&key).unwrap_or(false);
         self.last_repeat.remove(&key);
@@ -236,6 +237,22 @@ impl Mapper {
         if long_press_fired {
             debug!("Skipping normal action for {:?} (long press/repeat fired)", key);
             return;
+        }
+
+        // Devices without EV_REP (most gamepads and remotes behind uhid) never
+        // send held events, so handle_held cannot see the threshold pass. Judge
+        // the hold by its length on release instead.
+        if let Some(held) = held_for {
+            if held >= Duration::from_millis(self.long_press_ms) {
+                if let Some(script) = self.long_press_mappings.get(&key) {
+                    if self.log_buttons {
+                        info!("Long press (on release, {} ms): {:?} (code: {}) -> {}",
+                              held.as_millis(), key, key.code(), script);
+                    }
+                    execute_script(script);
+                    return;
+                }
+            }
         }
 
         // Execute normal mapping
