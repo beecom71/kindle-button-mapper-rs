@@ -48,6 +48,7 @@ pub struct Mapper {
     // controller that pulses the hat while held still counts as one hold),
     // and when a repeating binding last fired.
     dpad_hold_start: HashMap<DpadDirection, Instant>,
+    dpad_pulse_ms: u64,
     dpad_released_at: HashMap<DpadDirection, Instant>,
     dpad_hold_repeat: HashMap<DpadDirection, Instant>,
     // Trigger hold tracking (handles press-release-press auto-repeat pattern)
@@ -60,8 +61,8 @@ fn is_mouse_button(key: Key) -> bool {
     (Key::BTN_LEFT.code()..=Key::BTN_TASK.code()).contains(&key.code())
 }
 
-/// How long a centred hat may stay centred before a timed D-pad hold counts
-/// as released. Controllers that pulse the hat while held come back sooner.
+/// Used by the tests: a pulse window like a controller that pulses its hat.
+#[cfg(test)]
 const DPAD_RELEASE_GRACE_MS: u64 = 250;
 
 impl Mapper {
@@ -86,6 +87,7 @@ impl Mapper {
             debounce_ms: s.debounce_ms,
             long_press_ms: s.long_press_ms,
             repeat_ms: s.repeat_ms,
+            dpad_pulse_ms: s.dpad_pulse_ms,
             log_buttons: s.log_buttons,
             passthrough: cfg.passthrough || cfg.mouse,
             kolayout: cfg.keyboard_layout.as_deref().and_then(KoLayout::load),
@@ -451,9 +453,18 @@ impl Mapper {
     /// know how long the press was. Timing is done in tick_dpad().
     fn dpad_hold_press(&mut self, dir: DpadDirection) {
         if self.dpad_hold_start.contains_key(&dir) {
-            // Pulsing hat or a repeat of the same direction: still one hold.
-            self.dpad_released_at.remove(&dir);
-            return;
+            let pulse = match self.dpad_released_at.get(&dir) {
+                // Still held (no release seen): a repeated press of the same hold.
+                None => true,
+                Some(r) => self.dpad_pulse_ms > 0
+                    && r.elapsed() < Duration::from_millis(self.dpad_pulse_ms),
+            };
+            if pulse {
+                self.dpad_released_at.remove(&dir);
+                return;
+            }
+            // A real new tap right after the last one: settle the old hold now.
+            self.settle_dpad(dir);
         }
         if let Some(last) = self.last_dpad.get(&dir) {
             if last.elapsed() < Duration::from_millis(self.debounce_ms) {
@@ -467,6 +478,34 @@ impl Mapper {
         self.dpad_released_at.remove(&dir);
         self.dpad_hold_repeat.remove(&dir);
         self.dpad_longpress_fired.insert(dir, false);
+        // Fire the short action on the way down, as directions without a long
+        // binding do. Fast taps (menus) each count; a hold then adds the long one.
+        match self.dpad_mappings.get(&dir).cloned() {
+            Some(s) => self.run_dpad("D-pad", dir, &s),
+            None if self.log_buttons => info!("D-pad: {:?} [unmapped]", dir),
+            None => {}
+        }
+    }
+
+    /// Forget a finished D-pad hold. Its short action already ran on press;
+    /// only a long press the timer missed (held past the threshold) is left.
+    fn settle_dpad(&mut self, dir: DpadDirection) {
+        let start = self.dpad_hold_start.remove(&dir);
+        let released = self.dpad_released_at.remove(&dir);
+        self.dpad_hold_repeat.remove(&dir);
+        let fired = self.dpad_longpress_fired.remove(&dir).unwrap_or(false);
+        if fired {
+            return;
+        }
+        if let (Some(start), Some(released)) = (start, released) {
+            if released.saturating_duration_since(start) >= Duration::from_millis(self.long_press_ms) {
+                if let Some(s) = self.dpad_longpress_mappings.get(&dir)
+                    .or_else(|| self.dpad_longpress_repeat_mappings.get(&dir)).cloned()
+                {
+                    self.run_dpad("D-pad long press (on release)", dir, &s);
+                }
+            }
+        }
     }
 
     fn run_dpad(&self, label: &str, dir: DpadDirection, script: &str) {
@@ -481,7 +520,7 @@ impl Mapper {
             return;
         }
         let threshold = Duration::from_millis(self.long_press_ms);
-        let grace = Duration::from_millis(DPAD_RELEASE_GRACE_MS);
+        let grace = Duration::from_millis(self.dpad_pulse_ms);
         let dirs: Vec<DpadDirection> = self.dpad_hold_start.keys().copied().collect();
         for dir in dirs {
             let start = self.dpad_hold_start[&dir];
@@ -491,27 +530,8 @@ impl Mapper {
                 if released.elapsed() < grace {
                     continue; // may still be a pulse of the same hold
                 }
-                // Let go for good: settle what this press was.
-                self.dpad_hold_start.remove(&dir);
-                self.dpad_released_at.remove(&dir);
-                self.dpad_hold_repeat.remove(&dir);
-                self.dpad_longpress_fired.remove(&dir);
-                if fired {
-                    continue;
-                }
-                let held = released.saturating_duration_since(start);
-                let script = if held >= threshold {
-                    self.dpad_longpress_mappings.get(&dir)
-                        .or_else(|| self.dpad_longpress_repeat_mappings.get(&dir))
-                        .cloned().map(|s| ("D-pad long press (on release)", s))
-                } else {
-                    self.dpad_mappings.get(&dir).cloned().map(|s| ("D-pad", s))
-                };
-                match script {
-                    Some((label, s)) => self.run_dpad(label, dir, &s),
-                    None if self.log_buttons => info!("D-pad: {:?} [unmapped]", dir),
-                    None => {}
-                }
+                // Let go for good. The short action already ran on press.
+                self.settle_dpad(dir);
                 continue;
             }
 
@@ -916,28 +936,41 @@ mod tests {
     }
 
     #[test]
-    fn a_short_dpad_tap_settles_as_short_after_grace() {
+    fn a_short_dpad_tap_settles_at_once() {
         let mut m = dpad_mapper(true, false, 300);
-        m.handle_dpad(16, -1);
+        m.handle_dpad(16, -1); // short action runs here, on press
         m.handle_dpad(16, 0);
-        m.tick(); // inside grace, still pending
-        assert!(m.dpad_hold_start.contains_key(&DpadDirection::Left));
-        std::thread::sleep(Duration::from_millis(DPAD_RELEASE_GRACE_MS + 20));
         m.tick();
         assert!(m.dpad_hold_start.is_empty());
         assert!(m.dpad_longpress_fired.get(&DpadDirection::Left).is_none());
     }
 
     #[test]
+    fn fast_dpad_taps_each_count() {
+        let mut m = dpad_mapper(true, false, 300);
+        m.handle_dpad(16, -1);
+        let first = m.dpad_hold_start[&DpadDirection::Left];
+        m.handle_dpad(16, 0);
+        std::thread::sleep(Duration::from_millis(5));
+        m.handle_dpad(16, -1); // second tap before any tick: a new press, not merged
+        let second = m.dpad_hold_start[&DpadDirection::Left];
+        assert!(second > first);
+        assert!(m.dpad_released_at.get(&DpadDirection::Left).is_none());
+    }
+
+    #[test]
     fn a_pulsing_hat_is_one_hold() {
         let mut m = dpad_mapper(true, false, 60);
+        m.dpad_pulse_ms = DPAD_RELEASE_GRACE_MS;
         m.handle_dpad(16, -1);
+        let start = m.dpad_hold_start[&DpadDirection::Left];
         for _ in 0..4 {
             std::thread::sleep(Duration::from_millis(20));
             m.handle_dpad(16, 0);
-            m.handle_dpad(16, -1); // the controller re-presses within the grace
+            m.handle_dpad(16, -1); // the controller re-presses within the pulse window
             m.tick();
         }
+        assert_eq!(m.dpad_hold_start[&DpadDirection::Left], start);
         assert_eq!(m.dpad_longpress_fired.get(&DpadDirection::Left).copied(), Some(true));
     }
 

@@ -139,6 +139,9 @@ pub struct Config {
     pub debounce_ms: u64,
     pub long_press_ms: u64,
     pub repeat_ms: u64,
+    /// For D-pads that pulse the hat while held: a re-press within this many
+    /// ms of a release is the same hold. 0 (default) = every press counts.
+    pub dpad_pulse_ms: u64,
     pub log_buttons: bool,
     pub keep_awake: bool,
     pub stick_deadzone: i32,
@@ -156,6 +159,7 @@ impl Default for Config {
             debounce_ms: 200,
             long_press_ms: 500,
             repeat_ms: 100,
+            dpad_pulse_ms: 0,
             log_buttons: false,
             keep_awake: true,
             stick_deadzone: 50,
@@ -208,6 +212,7 @@ impl Config {
             if let Some(v) = get(s, "debounce_ms") { config.debounce_ms = v.parse().unwrap_or(config.debounce_ms); }
             if let Some(v) = get(s, "long_press_ms") { config.long_press_ms = v.parse().unwrap_or(config.long_press_ms); }
             if let Some(v) = get(s, "repeat_ms") { config.repeat_ms = v.parse().unwrap_or(config.repeat_ms); }
+            if let Some(v) = get(s, "dpad_pulse_ms") { config.dpad_pulse_ms = v.parse().unwrap_or(config.dpad_pulse_ms); }
             if let Some(v) = get(s, "log_buttons") { config.log_buttons = parse_bool(v); }
             if let Some(v) = get(s, "keep_awake") { config.keep_awake = parse_bool(v); }
             if let Some(v) = get(s, "stick_deadzone") { config.stick_deadzone = v.parse().unwrap_or(config.stick_deadzone); }

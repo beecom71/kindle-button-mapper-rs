@@ -172,10 +172,17 @@ fn plan(script: &str) -> Option<Vec<Step>> {
 
 /// A bare KOReader event name. Anything with a slash already carries its own
 /// argument and is left to the shell, which url-encodes it.
+/// `Name` or `Name/arg/arg…` as KOReader's event server takes them, e.g.
+/// `GotoViewRel/-1` or `AudioSyncNavUp/IncreaseFlIntensity/1`. Arguments go
+/// through the same in-process queue, so fast presses stay quick and in order.
 fn is_event_name(s: &str) -> bool {
-    !s.is_empty()
-        && s.starts_with(|c: char| c.is_ascii_alphabetic())
-        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    let mut parts = s.split('/');
+    let name = parts.next().unwrap_or("");
+    !name.is_empty()
+        && name.starts_with(|c: char| c.is_ascii_alphabetic())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && parts.all(|a| !a.is_empty()
+            && a.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.'))
 }
 
 /// Only what the injector itself accepts, so an unknown name still reaches
@@ -225,6 +232,20 @@ fn native_key(cmd: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn event_with_arguments_takes_the_fast_path() {
+        for ok in ["GotoViewRel/-1", "AudioSyncNavUp/IncreaseFlIntensity/1",
+                   "AudioSyncNavPress/AudioSyncTogglePlay", "Exit", "SetSpeed/1.25"] {
+            assert!(is_event_name(ok), "{}", ok);
+        }
+        for bad in ["", "/x", "Name/", "1Name", "Name/a b", "Name//x"] {
+            assert!(!is_event_name(bad), "{}", bad);
+        }
+        let s = "/mnt/us/kindle-button-mapper/scripts/koreader.sh event AudioSyncNavUp/IncreaseFlIntensity/1";
+        assert!(plan(s).is_some());
+    }
+
     use super::*;
 
     #[test]
@@ -290,8 +311,11 @@ mod tests {
             plan("scripts/koreader.sh event ToggleNightMode"),
             Some(vec![Step::Koreader("ToggleNightMode".into())])
         );
-        // Already carries an argument, the shell url-encodes it.
-        assert_eq!(plan("scripts/koreader.sh event GotoViewRel/1"), None);
+        // Plain arguments need no encoding, so they take the queue too.
+        assert_eq!(
+            plan("scripts/koreader.sh event GotoViewRel/1"),
+            Some(vec![Step::Koreader("GotoViewRel/1".into())])
+        );
         // Two arguments is never a hot path.
         assert_eq!(plan("scripts/koreader.sh event Foo Bar"), None);
         // The named shortcuts still work and win over the generic form.

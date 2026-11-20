@@ -150,6 +150,7 @@ pub(crate) struct WorkerSettings {
     debounce_ms: u64,
     long_press_ms: u64,
     repeat_ms: u64,
+    pub(crate) dpad_pulse_ms: u64,
     log_buttons: bool,
     stick_deadzone: i32,
     gesture_min_percent: i32,
@@ -166,6 +167,7 @@ impl WorkerSettings {
             debounce_ms: c.debounce_ms,
             long_press_ms: c.long_press_ms,
             repeat_ms: c.repeat_ms,
+            dpad_pulse_ms: c.dpad_pulse_ms,
             log_buttons: c.log_buttons,
             stick_deadzone: c.stick_deadzone,
             gesture_min_percent: c.gesture_min_percent,
@@ -274,7 +276,7 @@ fn device_worker(mut cfg: config::DeviceConfig, mut settings: WorkerSettings) {
                 }
                 if let Some(ref script) = settings.on_connect {
                     info!("[{}] running on_connect script", cfg.id);
-                    execute_script(script);
+                    execute_hook(script, &cfg.id, device.name().unwrap_or(""));
                 }
                 match run_event_loop(&mut device, &mut mapper, grab, gamepad,
                     &mut cfg, &mut generation, &mut settings) {
@@ -288,7 +290,7 @@ fn device_worker(mut cfg: config::DeviceConfig, mut settings: WorkerSettings) {
                         error!("[{}] event loop error: {}", cfg.id, e);
                         if let Some(ref script) = settings.on_disconnect {
                             info!("[{}] device disconnected, running on_disconnect script", cfg.id);
-                            execute_script(script);
+                            execute_hook(script, &cfg.id, "");
                         }
                     }
                 }
@@ -559,6 +561,25 @@ extern "C" fn handle_signal(_: i32) {
     unsafe { nix::libc::_exit(0) }
 }
 
+/// Run an on_connect / on_disconnect hook with the device it is about in
+/// KBM_DEVICE (the config block id, e.g. q36_for_android) and KBM_NAME.
+/// It runs in the background so a slow hook never holds up the device.
+fn execute_hook(script: &str, id: &str, name: &str) {
+    match Command::new("/bin/sh")
+        .args(["-c", script])
+        .env("KBM_DEVICE", id)
+        .env("KBM_NAME", name)
+        .spawn()
+    {
+        Ok(mut child) => {
+            // Reap it off the device thread, no zombies.
+            std::thread::spawn(move || { let _ = child.wait(); });
+        }
+        Err(e) => error!("Failed to execute '{}': {}", script, e),
+    }
+}
+
+#[allow(dead_code)]
 fn execute_script(script: &str) {
     match Command::new("/bin/sh").args(["-c", script]).spawn() {
         Ok(mut child) => {
